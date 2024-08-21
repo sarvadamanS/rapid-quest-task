@@ -1,13 +1,23 @@
+import path from "path";
+import { fileURLToPath } from "url";
 import express from "express";
 import { MongoClient } from "mongodb";
 import dotenv from "dotenv";
+
 dotenv.config();
+
 const app = express();
 const port = process.env.PORT || 5000;
+
+// Emulate __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // MongoDB connection string
 let uri = process.env.DATABASE_URL;
 let client, ordersCollection, customersCollection;
+
+let dbInitialized = false;
 
 async function connectToDatabase() {
   client = new MongoClient(uri, {
@@ -21,9 +31,10 @@ async function connectToDatabase() {
     const database = client.db("RQ_Analytics"); // Replace with your database name
     ordersCollection = database.collection("shopifyOrders"); // Replace with your collection name
     customersCollection = database.collection("shopifyCustomers"); // Replace with your collection name
-    console.log(ordersCollection);
+    dbInitialized = true;
   } catch (e) {
-    console.error(e);
+    console.error("Failed to connect to MongoDB:", e.message);
+    dbInitialized = false;
   }
 }
 function checkCollection(res, collection) {
@@ -34,7 +45,17 @@ function checkCollection(res, collection) {
   }
 }
 // Ensure the database connection is established before starting the server
-connectToDatabase().catch(console.error);
+// connectToDatabase().catch(console.error);
+
+// Middleware to check database connection
+app.use((req, res, next) => {
+  if (!dbInitialized) {
+    return res
+      .status(503)
+      .send("Database is not connected yet. Please try again later.");
+  }
+  next();
+});
 
 app.get("/api/customers", async (req, res) => {
   try {
@@ -43,7 +64,7 @@ app.get("/api/customers", async (req, res) => {
     if (!customersCollection) {
       return res
         .status(503)
-        .send("Database is not connected yet. Please try again later.");
+        .send(`Database is not connected yet. Please try again later.  ${uri}`);
     }
 
     // Perform a query on the customersCollection
@@ -53,7 +74,7 @@ app.get("/api/customers", async (req, res) => {
     res.json(documents[0]);
   } catch (e) {
     console.error(e);
-    res.status(500).send("Error retrieving data from MongoDB");
+    res.status(500).send(`Error retrieving data from MongoDB ${uri}`);
   }
 });
 app.get("/api/orders", async (req, res) => {
@@ -298,7 +319,20 @@ app.get("/api/customer-lifetime-value", async (req, res) => {
       .send("Error retrieving customer lifetime value data from MongoDB");
   }
 });
+// Serve static files from the 'dist' directory
+app.use(express.static(path.join(__dirname, "../dist")));
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+// Catch-all route to serve index.html for all other routes
+app.use("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "../dist", "index.html"));
 });
+
+connectToDatabase()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`Server is running on port ${port}`);
+    });
+  })
+  .catch((e) => {
+    console.error("Failed to start server:", e.message);
+  });
